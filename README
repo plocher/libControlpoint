@@ -1,0 +1,32 @@
+John Plocher's support files for Control Point experimentation
+http://www.spcoast.com/Arduino
+
+When we build our model railroad empires, we value being true to the prototype. Exact details on our engines ("rivet counting"), scale blueprints for buildings, layout design elements for trackwork, operations, dispatching, cTc machines and signals - all are aimed at recreating the romance, excitement and fun of the real thing.
+Except for wiring the layout, that is. We seem to wire our railroads in arbitrary, hodgepodge ways, with little regard to how the prototype does/did things. I'm involved with the JMRI project, and so get to see quite a few "layout wiring systems". Most depend on a PC that can see and control everything on the layout. C/MRI, Loconet, DCC AIU's - all focus on exposing the raw sensor info to a central program that then simulates the vital logic and superimposes some sort of control system on top.
+In the last year or so, I got involved in the ATCS monitoring part of the railfan community - monitoring and decoding the radio code line systems that the real railroads use to control and monitor their trains and tracks. This combination lead me to wonder what a model railroad would look like of it was designed and wired as a series of control points connected by a codeline instead.
+
+What's a codeline, and why is it interesting? A codeline delivers *indications* from the field to the dispatcher, and sends *commands* from the dispatcher to the field. These indications and commands contain the complete state of a control point (also known as an interlocking), including track circuits, switch states and whether the signals controlling that interlocking are showing STOP or not. The key point for me is that it is up to the relays and circuitry in the control point to monitor and manage all the vital logic and interlocking interconnects for itself. An example:
+*The Dispatcher sets all the signals to STOP. This causes a codeline control packet to be sent to the control point. The packet contains bits that represent "Signal XXX Set to Stop" for all the signals in that control point.
+*The CP receives this command packet, validates it (i,.e, is it legal to set those signals to stop right at this moment, based on home/remote track circuits, timers, and the like), sets the signals to STOP and returns an indication packet showing the new state of the control point.
+*Assuming a train is stopped before the CP's signal and the dispatcher wants to allow it to proceed, the dispatcher would line a route thru the control point, setting switches and signals to match. When the Code button is pressed, another control packet is sent to the CP, containing new commands.
+*The CP digests this new packet, sends back an indications packet, then sets switches to match; when the points report "in position" and "locked", the signals get released from STOP to show something other than STOP. The particular aspect they show is entirely dependent on the state of the interlocking - if there is another train close by, the aspect will be more restrictive than if the track is clear.
+*It is this last set of behaviors that is interesting to me - the dispatcher has no direct control over whether a signal shows ADVANCE APPROACH, CLEAR or RESTRICTING when it is not showing STOP - that part is entirely up to the vital logic part of the system.
+
+By modeling a control point in electronics hardware and arduino software, I hope to explore the ramifications of keeping the vital logic close to the tracks being controlled - and away from the higher level software abstractions hosted elsewhere on the layout. One key benefit I hope to achieve is the ability to run a full featured signaling system without the need for a PC running C/MRI or JMRI or ...)
+
+The files here encapsulate the main "design patterns" common to model rqilroad control - turnouts, track circuits, signals, etc.  They are intended to be "layout neutral", and usable across different systems.
+See also the "SPCoast" configuration files that define my layout in detail.
+
+
+<ul>
+<li> ControlPoint.cpp
+<li> ControlPoint.h	Main header, includes others
+<li> Maintainer.h	Maintainer Call indicator
+<li> RRSignal.h		A logical signal
+<li> RRSignalHead.h	A mast with head(s)
+<li> Switch.h		Turnouts
+<li> TrackCircuit.h	Detectors
+<li> Lighting.h		- experimental - room and layout lighting
+</ul>
+
+
