@@ -1,14 +1,132 @@
 /*
  * Common routines that are generic across control points
  *
- * Copyright 2014 John Plocher, released under the terms of the MIT License (MIT)
+ *    Copyright (c) 2013-2015 John Plocher
+ *    Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
  */
 
 #include <Arduino.h>
 #include <ControlPoint.h>
 #include <LocoNet.h>
+#include <EEPROM.h>
+
 
 // #define DEBUG
+
+void ControlPoint::initializeCodeLine(int lnrx, int lntx) {
+    pinMode(lntx, OUTPUT);     // Loconet Send Data     (7)
+    pinMode(lnrx, INPUT);      // Loconet RxD			(8)
+    LocoNet.init(lntx);     // initialize the LocoNet interface
+}
+
+// utility routine, used for debugging low mwmory problems...
+int ControlPoint::freeRam () {
+  extern int __heap_start, *__brkval; 
+  int v; 
+  return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval); 
+}
+
+// Initialize any control point specifics...
+int savedcontrols[8];
+int usesavedstate = 0;
+void ControlPoint::setup(void) {
+	usesavedstate = 0;
+	restorestate();
+}
+
+/* 
+ *  EEPROM memory map
+ *
+ *      0     flag == 42
+ *      1     checksum of control packet
+ *      2-9   unused
+ *     10     controls[0]
+ *     11     controls[1]
+ *     12     controls[2]
+ *     13     controls[3]
+ *     14     controls[4]
+ *     15     controls[5]
+ *     16     controls[6]
+ *     17     controls[7]
+ *     19-... unused
+ *
+ */
+void ControlPoint::savestate(int *controls) {
+	// save last state in EEPROM, restore on restart...
+	byte csum = 0;
+	EEPROM.write(0, 42);
+	for (int x = 0; x < 7; x++) {
+		EEPROM.write(10+x, controls[x]);
+		csum += controls[x];
+	}
+	EEPROM.write(1, csum);
+}
+void ControlPoint::restorestate(void) {
+	byte csum;
+	byte goodinfo = 1;
+	
+	if (EEPROM.read(0) != 42) {
+		goodinfo = 0;
+	}
+	for (int x = 0; x < 7; x++) {
+		savedcontrols[x] = EEPROM.read(10+x);
+		csum += savedcontrols[x];
+	}
+	if (csum != EEPROM.read(1)) {
+		goodinfo = 0;
+	}
+	
+	if (goodinfo) {
+		usesavedstate = 1;
+	} else {
+		// no state to restore, so be safe
+		// set all switches to NORMAL, all signals to STOP
+		for (int x = 0; x <  getNumSwitches(); x++) {
+	        sw[x].set(Switch::NORMAL);
+	    }
+	    for (int x = 0; x <  getNumSignals(); x++) {
+	        sig[x].knockdown();
+	        sig[x].report();
+	    }
+	}
+}
+
+int ControlPoint::LnPacket2Controls(int *src, int *dst, int *controls) {
+	lnMsg *LnPacket;
+	if (usesavedstate) {  // use saved state from last valid control packet to restore control point
+		for (int x = 0; x < 7; x++) {
+			controls[x] = savedcontrols[x];
+			savedcontrols[x] = 0; // prevent reuse...
+		}
+		usesavedstate = 0;
+		return 2;
+	} else if ((LnPacket = LocoNet.receive())) {
+	    unsigned char opcode = (int)LnPacket->sz.command;
+	    *src = (byte)LnPacket->px.src;
+	    *dst = (((byte)LnPacket->px.dst_h & 0x7f) << 7) | ((byte)LnPacket->px.dst_l & 0x7f);
+	    if (opcode == OPC_PEER_XFER) {
+	        controls[0] = (byte)LnPacket->px.d1;  
+	        controls[1] = (byte)LnPacket->px.d2;  
+	        controls[2] = (byte)LnPacket->px.d3;
+	        controls[3] = (byte)LnPacket->px.d4;
+	        controls[4] = (byte)LnPacket->px.d5;  
+	        controls[5] = (byte)LnPacket->px.d6;  
+	        controls[6] = (byte)LnPacket->px.d7;
+	        controls[7] = (byte)LnPacket->px.d8;
+	        if ((byte)LnPacket->px.pxct1 & B00000001) controls[0] |= B10000000;
+	        if ((byte)LnPacket->px.pxct1 & B00000010) controls[1] |= B10000000;
+	        if ((byte)LnPacket->px.pxct1 & B00000100) controls[2] |= B10000000;
+	        if ((byte)LnPacket->px.pxct1 & B00001000) controls[3] |= B10000000;
+         
+	        if ((byte)LnPacket->px.pxct2 & B00000001) controls[4] |= B10000000;
+	        if ((byte)LnPacket->px.pxct2 & B00000010) controls[5] |= B10000000;
+	        if ((byte)LnPacket->px.pxct2 & B00000100) controls[6] |= B10000000;
+	        if ((byte)LnPacket->px.pxct2 & B00001000) controls[7] |= B10000000;
+	        return 1;
+	    }
+    }
+    return 0;
+}
 
 boolean ControlPoint::readall(void) {
     boolean somethingchanged = false; 
@@ -55,13 +173,15 @@ void ControlPoint::writeall(void) {
         sw[x].pack();
     }
     // Signals  
-    // for (int x = 0; x < getNumSignals(); x++) { 
-    //     sig[x].pack();
-    // }
+    for (int x = 0; x < getNumHeads(); x++) { 
+        head[x].pack();
+    }
     // Maintainer Call(s)
     for (int x = 0; x < getNumCalls(); x++) { 
         mc[x].pack();
     }
+	//Serial.("M[0]="); ControlPoint::printBin(m[0].next);Serial.println();
+	//Serial.print("M[1]="); ControlPoint::printBin(m[1].next);Serial.println();
     for (int x = 0; x < getNumPorts(); x++) {
         m[x].put();   // push the .next contents out to the field
     }
@@ -69,20 +189,8 @@ void ControlPoint::writeall(void) {
 
 
 /*
- * Evaluate the dependencies in a route statement
- * 
- * Example: sig[SIG2SA] = (evaluateevaluate(" SW1   SW3  (SW5) SIG2(RIGHT) SIG2SA(FLEET,ER) K2NAAT H2NA") 
- *
- * Signal 2S head A can be set to NON-STOP if
- * SW1 and SW3 are normal,
- * SW 5 is reversed  
- * SIG2 (the cTc commanded direction) is set to RIGHT
- * the 2SA mast/head hasthe engine return or FLEET stick relay energized (TBD...)
- * the track circuit 2NAA (the track this route leads to) must be clear
- * and Signal Head 2NA (allowing traffic from the other direction) must be at STOP
- *
+ * Get "X" by name  functions
  */
-static char subtokens[40];
 
 int ControlPoint::getSignal(char *name) {
 	int x;
@@ -107,149 +215,6 @@ int ControlPoint::getTrack(char *name) {
 	return (x != getNumTrackCircuits()) ? x : -1;
 }
 
-
-#if 0
-static ControlPoint::mostRestrictive(RRSignalHead::Aspects current, RRSignalHead::Aspects desired) {
-	return ((int) current < (int) desired) ? desired : current;
-}
-#endif
-
-// Switches can be represented as
-//     SW1    -or-     (SW1)
-// meaning "must be Normal" or "(must be Reverse)"
-RRSignalHead::Aspects ControlPoint::A_Switch(char *name, char *token) {
-		RRSignalHead::Aspects aspect = RRSignalHead::CLEAR;
-		Switch::State desiredState;
-		int x= getSwitch(name);
-		if (x == -1) {
-				aspect = RRSignalHead::STOP; // no such switch
-		} else {
-			if (*token == '(') { desiredState = Switch::REVERSE; } 
-			else               { desiredState = Switch::NORMAL; }
-			if (! sw[x].is(desiredState)) {	// Not what is expected
-				aspect = RRSignalHead::STOP;
-			}
-	    }
-		return aspect;
-}
-
-// Signals can be
-// SIG2    -or-    SIG2(xxx,xxx)
-// meaning must be at stop  
-//   -or-
-// Signal has named "stick" values set
-// Values can be
-//		RIGHT, LEFT		- indicating a signal dependency
-//		FLEET			- is the FLEET "relay" set?
-//		ER				- is the interlocking in a Engine Return state (a cut of cars left on main when switching a siding)?
-
-RRSignalHead::Aspects ControlPoint::A_Signal(char *name, char*token) {
-	RRSignalHead::Aspects aspect = RRSignalHead::CLEAR;
-	char *i2;
-	int x = getSignal(name);
-	if (x == -1) return RRSignalHead::STOP;
-	char *subtoken_idx = strchr(name, '('); // )
-	if (subtoken_idx) {			// Grab the values in their own string array...
-		strcpy(subtokens, subtoken_idx+1); // Skip the '('
-		subtokens[strlen(subtokens) - 1] = '\0'; // stomp on the trailing ')'
-		*subtoken_idx = '\0';
-		for (subtoken_idx = subtokens; ; subtoken_idx = NULL) {
-			char *subtoken = strtok_r(subtoken_idx, ",", &i2);
-			if (subtoken == NULL) { break; }
-			if        (strcmp(subtoken, "RIGHT") == 0) { if (!sig[x].is(RRSignal::RIGHT))        { aspect = RRSignalHead::mostRestrictive(aspect, RRSignalHead::CLEAR); }
-			} else if (strcmp(subtoken, "LEFT")  == 0) { if (!sig[x].is(RRSignal::LEFT))         { aspect = RRSignalHead::mostRestrictive(aspect, RRSignalHead::CLEAR); } 
-			} else if (strcmp(subtoken, "FLEET") == 0) { if (!sig[x].stick() == RRSignal::FLEET) { aspect = RRSignalHead::mostRestrictive(aspect, RRSignalHead::CLEAR); } 
-			} else if (strcmp(subtoken, "ER")    == 0) { if (!sig[x].stick() == RRSignal::ER)    { aspect = RRSignalHead::mostRestrictive(aspect, RRSignalHead::RESTRICTING); } 
-			} else                                                                               { aspect = RRSignalHead::mostRestrictive(aspect, RRSignalHead::STOP); // invalid field token
-			}
-		}
-	} else {
-		if (!sig[x].is(RRSignal::ALLSTOP)) {  // Opposing signal not at STOP
-			aspect = RRSignalHead::mostRestrictive(aspect, RRSignalHead::STOP); 
-		}
-	}
-	return aspect;
-}
-
-RRSignalHead::Aspects ControlPoint::A_Approach(char *name, char *token) {
-	RRSignalHead::Aspects aspect     = RRSignalHead::CLEAR;
-	RRSignalHead::Aspects tempaspect = RRSignalHead::CLEAR;
-	if      (name[1] == 'A') { tempaspect = RRSignalHead::ADVANCED_APPROACH;}	// AA(TRACK,TRACK...)
-	else if (name[1] == '(') { tempaspect = RRSignalHead::APPROACH;}			// A(TRACK,TRACK...)
-	else                     { tempaspect = RRSignalHead::STOP;}				// A?(TRACK,TRACK...) - anything else is a syntax error...
-	
-	char *i2;
-	char *subtoken_idx = strchr(name, '(');
-	if (subtoken_idx) {
-		strcpy(subtokens, subtoken_idx+1);
-		subtokens[strlen(subtokens) - 1] = '\0'; // stomp on the trailing ')'
-		*subtoken_idx = '\0';
-	} else {
-		subtokens[0] = '\0';
-	}
-	
-	// subtokens is the list of tracks which, if occupied, should result in tempaspect being the signal state...
-	boolean myOR = 0;
-	if (subtokens[0]) {
-		for (subtoken_idx = subtokens; ; subtoken_idx = NULL) {
-			char *subtoken = strtok_r(subtoken_idx, ",", &i2);
-			if (subtoken == NULL) {
-				break;
-			}
-			int x = getTrack(subtoken);
-			if (x == -1) {
-				return RRSignalHead::STOP;
-			}
-			myOR |= track[x].is(TrackCircuit::OCCUPIED); 
-		}
-		aspect = ((myOR) ? tempaspect : RRSignalHead::CLEAR);
-	}
-	return aspect;
-}
-
-// Track Circuits - occupied => STOP
-RRSignalHead::Aspects ControlPoint::A_Track(char *name, char*token) {
-	RRSignalHead::Aspects aspect = RRSignalHead::STOP;
-	// Track Circuit
-	int x = getTrack(name);
-	if (x != -1) {
-		aspect = (track[x].is(TrackCircuit::EMPTY)) ? RRSignalHead::CLEAR : RRSignalHead::STOP;
-	}
-	return aspect;
-}
-
-char name[40];
-// Caution:  Modifys char *input
-RRSignalHead::Aspects ControlPoint::Evaluate(char *input) {	
-	RRSignalHead::Aspects aspect = RRSignalHead::CLEAR;
-	name[0] = '\0';
-	char *str, *token, *i1;
-	if (strlen(input) >= 75) { return RRSignalHead::STOP; }
-	for (str = input; ; str = NULL) {
-		if (aspect == RRSignalHead::STOP) { return aspect; }
-	    token = strtok_r(str, " ", &i1);  // walk thru input getting tokens, put token value into "name"
-	    if (token == NULL) { break; }
-	    
-	    if (*token == '(') {  // (name) - we want to strip the parenthisis, giving token = "(xxx)" and name = "xxx"
-	        strcpy(name, token+1);
-	        name[strlen(name) -1] = '\0';
-	    } else {              // name  or name(value,value)
-	        strcpy(name,token);
-	    }
-		// We have a token, now evaluate it...
-		if      ((name[0] == 'S') && (name[1] == 'W')) 						aspect = RRSignalHead::mostRestrictive(aspect, A_Switch(name, token));	// SW1
-		else if ((name[0] == 'S') && (name[1] == 'I'))						aspect = RRSignalHead::mostRestrictive(aspect, A_Signal(name, token)); 	// SIG2 or SIG4(stick,values)
-		else if ((name[0] == 'A'))											aspect = RRSignalHead::mostRestrictive(aspect, A_Approach(name, token));// AA(TRACK,TRACK...) or A(TRACK,TRACK...)
-	    else if ((name[0] == 'T') || (name[0] == 'W') || (name[0] == 'E'))	aspect = RRSignalHead::mostRestrictive(aspect, A_Track(name, token));	// T1, WA1 EA2
-	}
-	return aspect;
-}    
-
-void ControlPoint::initializeCodeLine(int lnrx, int lntx) {
-    pinMode(lntx, OUTPUT);     // Loconet Send Data     (7)
-    pinMode(lnrx, INPUT);      // Loconet RxD			(8)
-    LocoNet.init();     // initialize the LocoNet interface
-}
 
 
 int ControlPoint::sendCodeLine(int from, int to, int *indications) {
@@ -291,42 +256,13 @@ int ControlPoint::sendCodeLine(int from, int to, int *indications) {
       checksum ^= SendPacket.data[i];
     }
     SendPacket.data[ 15 ] = checksum; //checksum  
-#ifdef DEBUG  
+#ifdef LNDEBUG  
     Serial.print("Send: OPC_PEER_XFER ");
 	ControlPoint::printLnPacket(&SendPacket);
 #endif
     return (int)LocoNet.send( &SendPacket );   
 }
 
-boolean ControlPoint::LnPacket2Controls(int *src, int *dst, int *controls) {
-	lnMsg *LnPacket;
-	if ((LnPacket = LocoNet.receive())) {
-	    unsigned char opcode = (int)LnPacket->sz.command;
-	    *src = (byte)LnPacket->px.src;
-	    *dst = (((byte)LnPacket->px.dst_h & 0x7f) << 7) | ((byte)LnPacket->px.dst_l & 0x7f);
-	    if (opcode == OPC_PEER_XFER) {
-	        controls[0] = (byte)LnPacket->px.d1;  
-	        controls[1] = (byte)LnPacket->px.d2;  
-	        controls[2] = (byte)LnPacket->px.d3;
-	        controls[3] = (byte)LnPacket->px.d4;
-	        controls[4] = (byte)LnPacket->px.d5;  
-	        controls[5] = (byte)LnPacket->px.d6;  
-	        controls[6] = (byte)LnPacket->px.d7;
-	        controls[7] = (byte)LnPacket->px.d8;
-	        if ((byte)LnPacket->px.pxct1 & B00000001) controls[0] |= B10000000;
-	        if ((byte)LnPacket->px.pxct1 & B00000010) controls[1] |= B10000000;
-	        if ((byte)LnPacket->px.pxct1 & B00000100) controls[2] |= B10000000;
-	        if ((byte)LnPacket->px.pxct1 & B00001000) controls[3] |= B10000000;
-         
-	        if ((byte)LnPacket->px.pxct2 & B00000001) controls[4] |= B10000000;
-	        if ((byte)LnPacket->px.pxct2 & B00000010) controls[5] |= B10000000;
-	        if ((byte)LnPacket->px.pxct2 & B00000100) controls[6] |= B10000000;
-	        if ((byte)LnPacket->px.pxct2 & B00001000) controls[7] |= B10000000;
-	        return true;
-	    }
-    }
-    return false;
-}
 
 #ifdef DEBUG
 void ControlPoint::printEverything(void) {

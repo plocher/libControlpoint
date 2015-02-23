@@ -1,3 +1,11 @@
+/*
+ *    Track Circuit abstrction
+ *
+ *    Copyright (c) 2013-2015 John Plocher
+ *    Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+ *
+ */
+
 #ifndef TRACKCIRCUIT_H
 #define TRACKCIRCUIT_H
 #include <Arduino.h>
@@ -27,9 +35,8 @@ public:
 									    } else if (_m) {
 											unpack(_m, _bitpos);
 										} else unpack(ERROR);
-									   }
-    void print(void)                   { 
-#ifdef DEBUG
+									  }
+    void print(void)                  { 
 										const char *s;
                                         for(int x = 7-strlen(_name); x > 0; x--) { Serial.print(" "); }
                                         Serial.print(_name); Serial.print(":");
@@ -41,8 +48,7 @@ public:
                                             case TrackCircuit::ERROR:    s = "     ERROR"; break;
                                         }
                                         Serial.print(s);
-#endif
-                                       };
+                                      };
 private:
 	void _init(const char *name, State (*setState)(const char *), I2Cextender *m, int bitpos) {
 		_name = name; 

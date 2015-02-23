@@ -1,3 +1,11 @@
+/*
+ *    Railroad Signal Head abstrction
+ *
+ *    Copyright (c) 2013-2015 John Plocher
+ *    Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+ *
+ */
+
 #ifndef RRSIGNALHEAD_H
 #define RRSIGNALHEAD_H
 #include <Arduino.h>
@@ -8,6 +16,7 @@
 
 class RRSignalHead {
 public:	
+	// MUST be the SAME as RRSignal's version (work around for an Arduino limitation)
     enum Aspects   { CLEAR, LIMITED_CLEAR, ADVANCED_APPROACH, APPROACH, RESTRICTING, STOP, DARK };
     //                G       (G)              (Y)              Y           (R)        R
     
@@ -34,14 +43,14 @@ public:
 	    switch (_commanded) {                            // 00 = green, 11 = dark, 01 = yellow, 10 = red
 	      case RRSignalHead::CLEAR:                *bit1 = 0; *bit2 = 0; blinking = 0; break;  //  G
 	      case RRSignalHead::LIMITED_CLEAR:        *bit1 = 0; *bit2 = 0; blinking = 1; break;  // (G)
-	      case RRSignalHead::ADVANCED_APPROACH:    *bit1 = 0; *bit2 = 1; blinking = 1; break;  // (Y)
-	      case RRSignalHead::APPROACH:             *bit1 = 0; *bit2 = 1; blinking = 0; break;  //  Y
-	      case RRSignalHead::RESTRICTING:          *bit1 = 1; *bit2 = 0; blinking = 1; break;  // (R)
+	      case RRSignalHead::ADVANCED_APPROACH:    *bit1 = 1; *bit2 = 0; blinking = 1; break;  // (Y)
+	      case RRSignalHead::APPROACH:             *bit1 = 1; *bit2 = 0; blinking = 0; break;  //  Y
+	      case RRSignalHead::RESTRICTING:          *bit1 = 0; *bit2 = 1; blinking = 1; break;  // (R)
 	      default:
-	      case RRSignalHead::STOP:                 *bit1 = 1; *bit2 = 0; blinking = 0; break;  //  R
+	      case RRSignalHead::STOP:                 *bit1 = 0; *bit2 = 1; blinking = 0; break;  //  R
 	      case RRSignalHead::DARK:                 *bit1 = 1; *bit2 = 1; blinking = 0; break;  //-dark-
 	    }
-	    if (blinker > 1000) {
+	    if (blinker > 900) {
 	      blinker = 0;
 	      blinkstate = (blinkstate == 0 ? 1 : 0);
 	    }
@@ -64,23 +73,27 @@ public:
 			pack(_m, _bitpos1, _bitpos2, bit1, bit2);
 		}
 	}
-    void setRoutes(const char **str) {
+    void setRoutes(void *str) {
 		_routes = str;
 	};
-	const char **getRoutes() {
-		return _routes;
+	const char* const* getRoutes() {
+		return (char* const*)_routes;
 	}
     static Aspects mostRestrictive(Aspects a1, Aspects a2)  { 
-		((int) a1 < (int) a2) ? a2 : a1;
+		return (((int) a1) < ((int) a2)) ? (a2) : (a1);
+	};
+    static Aspects leastRestrictive(Aspects a1, Aspects a2)  { 
+		return (((int) a1) > ((int) a2)) ? (a2) : (a1);
 	};
 
+    Aspects is(void)             	  { return (_commanded); };
     boolean is(Aspects s)             { return (_commanded == s); };
 	boolean named(char *n)            { return strcmp(n, _name) == 0; };
     void set(Aspects s)               { _commanded = s; };
-	boolean hasSig()				  { _sig ? true : false; }
-	void setWithSig(void)			  { 
-										if (_sig) { set((*_sig).is(RRSignal::ALLSTOP) ? STOP: CLEAR); }
-									  }
+	//boolean hasSig()				  { return _sig ? true : false; }
+	//void setWithSig(void)			  { 
+	//									if (_sig) { set((*_sig).is(RRSignal::ALLSTOP) ? STOP: CLEAR); }
+	//								  }
     void print(void) {
 #ifdef DEBUG
 	    const char *s;
@@ -98,8 +111,10 @@ private:
 		_commanded = RRSignalHead::STOP;
 		_setAspect = setFunction;
 		_m = m;
-		_bitpos1 = bitpos1;
-		_bitpos2 = bitpos2;
+		_bitpos1   = bitpos1;
+		_bitpos2   = bitpos2;
+		blinkstate = 0;
+		_routes    = NULL;
 	};
 	
 	const char *toString(Aspects a) {
@@ -115,7 +130,7 @@ private:
     }
 
 	elapsedMillis blinker;
-	boolean blinkstate = 0;
+	boolean blinkstate;
     const char    *_name;
 	RRSignal      *_sig;
 	I2Cextender   *_m;
@@ -123,7 +138,7 @@ private:
 	int           _bitpos2;
 	Aspects       _commanded;  
 	void (*_setAspect)(const char*, Aspects, int, int); 
-	const char **_routes = { NULL };
+	void*  _routes; 
 };
 
 

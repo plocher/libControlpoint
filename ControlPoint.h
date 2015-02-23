@@ -1,10 +1,11 @@
 /* 
- * Copyright 2014 John Plocher, released under the terms of the MIT License (MIT)
+ *    Copyright (c) 2013-2015 John Plocher
+ *    Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
  */
 
 #ifndef CONTROLPOINT_H
 #define CONTROLPOINT_H
-
+#define DEBUG
 #include <Arduino.h>
 #include <LocoNet.h>
 
@@ -32,13 +33,18 @@ extern Maintainer		mc[];
 
 class ControlPoint {
 public:
-	static RRSignalHead::Aspects Evaluate(char *input);
+	//static RRSignalHead::Aspects Evaluate(char *input);
 	//static RRSignalHead::Aspects mostRestrictive(RRSignalHead::Aspects current, RRSignalHead::Aspects desired);
-	static void 				 initializeCodeLine(int lnrx, int lntx);
-	static int                   sendCodeLine(int from, int to, int *indications);
-	static boolean               readall(void);
-	static void                  writeall(void);	
-	static boolean               LnPacket2Controls(int *src, int *dst, int *controls);
+	static void 			 initializeCodeLine(int lnrx, int lntx);
+	static int               sendCodeLine(int from, int to, int *indications);
+	static boolean           readall(void);
+	static void              writeall(void);	
+	static int               LnPacket2Controls(int *src, int *dst, int *controls);
+	static int               freeRam (void);
+	static void              setup(void);
+	static void              savestate(int *controls);
+	static void              restorestate(void);
+	
 #ifdef DEBUG
 	static void              printEverything(void);	
 	static void              printControls(int from, int to, int *controls);

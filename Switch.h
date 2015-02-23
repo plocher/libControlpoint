@@ -1,6 +1,15 @@
+/*
+ *    Railroad Turnout (aka Switch) abstrction
+ *
+ *    Copyright (c) 2013-2015 John Plocher
+ *    Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+ *
+ */
+
 #ifndef SWITCH_H
 #define SWITCH_H
 #include <Arduino.h>
+#include <elapsedMillis.h>
 #include "RRSignal.h"
 #include "TrackCircuit.h"
 
@@ -9,34 +18,16 @@
  *
  * Can be Normal, Reverse, in motion, or failed.
  *
- * Driven by 
- *    Control packets from Dispatcher
- *    Local crew control
- *    Maintainer overrides
- *
  * Implements both Signal Locking and Track Circuit locking
  *
  * Flow:  
  *    cTc asks if safe to change, remember the potential new state
- *    cTc says to change, if safe to do so, use potential state - timer stashes new state in _nextcommanded, runs for several seconds, sets _commanded.  
+ *    if all components are safe to change, use validated state 
+ *        - timer stashes new state in _nextcommanded, runs for several seconds, sets _commanded.  
+ *    else ignore control packet
  *    Layout written using commanded state
  *    Layout read, into _real
  *    Indications come from real state
- *
- * TODO: State Machine
- *    IDLE - if !OCCUPIED  : IDLE
- *    IDLE - if  !INSERVICE  : IDLE
- *    IDLE - if  OCCUPIED  : LOCKED
- *    IDLE - if INSERVICE, if Occupied : LOCKED
- *    LOCKED - if !INSERVICE: IDLE
- *    LOCKED - if !OCCUPIED: IDLE
- *    LOCKED - if INSERVICE: IDLE
- *
- *  TODO: Command:
- *    CHANGE POSITION - if LOCKED : Remember Command :  ERROR
- *    CHANGE POSITION - if IDLE   : NEW POSITION 
- *    MAINTAINER OVERRIDE : !INSERVICE
- *    INSERVICE:             INSERVICE
  */
  
 class Switch {
@@ -47,14 +38,14 @@ public:
     //Switch(const char *name, RRSignal *s)                    { _init(name, s,    NULL); };
     //Switch(const char *name, RRSignal *s, TrackCircuit *t)   { _init(name, s,    t); };
     
-    Switch(const char *name) {
+    Switch(char *name) {
 		_init(name, NULL, NULL, NULL, 0, 0, 0); 
 	};
 
-	Switch(const char *name, I2Cextender *m, int bitposN, int bitposR, int bitposM) { 
+	Switch(char *name, I2Cextender *m, int bitposN, int bitposR, int bitposM) { 
 		_init(name, NULL, NULL, m, bitposN, bitposR, bitposM); 
 	};
-	Switch(const char *name, State (*getFunction)(const char *), void (*setFunction)(const char *, State)) {
+	Switch(char *name, State (*getFunction)(const char *), void (*setFunction)(const char *, State)) {
 		_init(name, getFunction, setFunction, NULL, 0, 0, 0); 
 	};
 	
@@ -76,6 +67,8 @@ public:
 	State readLayout(void) {
 		if (_getState) {
 			return _getState(_name);
+		} else if (_m && (_bitposN == -1)) {
+			return _real; 	// no feedback from layout, use last commanded state...
 		} else if (_m) {
 			return readLayout(_m, _bitposN, _bitposR);
 		} else {
@@ -91,6 +84,7 @@ public:
 		if (_setState) {
 			_setState(_name, _real);
 		} else if (_m) {
+			//Serial.print("Packing "); print(); Serial.println();
 			pack(_m, _bitposM, fieldcommand());
 		}
 	}
@@ -102,8 +96,9 @@ public:
 	
 	
 	// user callable functions to manage the state of the turnout - everything after this needs to be safe
-	
-                                      // Safe to change when no change needed or if signal is at STOP and track UNOCCUPIED
+	// Safe to change when no change needed or if signal is at STOP and track UNOCCUPIED
+    boolean isS(State s)               { return (_safestate == s); };
+
 	boolean isSafe(void) {
 		return isSafe(readLayout());
 	}
@@ -116,12 +111,15 @@ public:
 		_safestate = s;
 		return true;
 	};
-
+	void  doSafe(void)				  { if (_safestate != UNKNOWN) { set(_safestate); _safestate = UNKNOWN; } }
+	
+    boolean isC(State s)               { return (_commanded == s); };
     State commanded(void)             { return _commanded;};  // From the dispatcher/cTc machine
-    void  set(State s)                { if ((s != Switch::UNKNOWN) && (_commanded != s)) { setSlowMotion(5,s); } };
+
+	void  set(State s)                { if ( (s == NORMAL) || (s == REVERSE)) { _nextcommanded = _commanded = s; } };
     void  set(int n, int r)           { set(toState(n,r)); };
+
 	// Use state from earlier isSafe call...
-	void  doSafe(void)				  { set(_safestate); _safestate = UNKNOWN; }
     State toState(int n, int r)       { return (
                                             (((r) == 1) && ((n) == 0)) ? Switch::REVERSE :
                                             (((r) == 0) && ((n) == 1)) ? Switch::NORMAL : 
@@ -129,24 +127,14 @@ public:
                                             Switch::ERROR
                                         );
                                       }
+
     byte fieldcommand(void)           { return ((_commanded == Switch::NORMAL) ? 0 : 1 ); }    // control bit - 0 = normal, 1 - reverse
-    
-
-
-
-
-
-
-
-
-    byte normalindication(void)       { return ((_real == Switch::NORMAL) ? 1 : 0 ); }  
-    byte reverseindication(void)      { return ((_real == Switch::REVERSE) ? 1 : 0 ); }    
 
     boolean isRunning(void)           { return (_timer != Switch::NOTIMER); }
     boolean isExpired(void)           { return (_timer == Switch::EXPIRED); }
     void setSlowMotion(int seconds, State s){
                                             // set a timer to simulate the time it takes a switch to throw...
-                                            _timestarted = millis();  
+                                            _delaytime = 0;  
                                             _time2end = (seconds *1000); 
                                             _timer = Switch::RUNNING;
                                             _nextcommanded = s;
@@ -156,8 +144,7 @@ public:
                                       }
     Timer runSlowMotion(void)               {
                                         if (isRunning()) {
-                                            unsigned int timeNow = millis();
-                                            if (timeNow - _timestarted > _time2end) { // timer expired
+                                            if (_delaytime > _time2end) { // timer expired
                                                 _timer = Switch::EXPIRED;
                                             }
 											// Serial.print("runningSloMo: "); print(); Serial.println(); 
@@ -165,17 +152,16 @@ public:
                                         } 
                                         if (_timer == Switch::EXPIRED) {
                                           _real = _commanded = _nextcommanded;
-                                          _timestarted = _time2end = 0;
                                           _timer = Switch::NOTIMER;
-										  Serial.print("doneSloMo: "); print(); Serial.println(); 
+										  //Serial.print("doneSloMo: "); print(); Serial.println(); 
 										  return Switch::EXPIRED;
                                         }  
                                         return _timer;  
                                       }
                                       
-    boolean named(char *n)            { return strcmp(n, _name) == 0; }
+    char * name(void)                 { return _name; }
+	boolean named(char *n)            { return strcmp(n, _name) == 0; }
     void print(void)                  { 
-#ifdef DEBUG
                                         for(int x = 7-strlen(_name); x > 0; x--) { Serial.print(" "); }
                                         Serial.print(_name); Serial.print(" real:"); 
 										Serial.print(toString(_real));
@@ -190,19 +176,17 @@ public:
 										Serial.print(" field:"); 
 										Serial.print(fieldcommand(), BIN);
                                         Serial.print(" ");
-                                        
-#endif
-                                       };
+                                      };
 private:
-	void _init(const char *name, State (*getFunction)(const char *), void (*setFunction)(const char *, State), I2Cextender *m, int bitposN, int bitposR, int bitposM) { 
-		_name      = name; 
+	void _init(char *name, State (*getFunction)(const char *), void (*setFunction)(const char *, State), I2Cextender *m, int bitposN, int bitposR, int bitposM) { 
+		_name      = (char *)name; 
 		_getState = getFunction;
 		_setState = setFunction;
 		_m = m;
 		_bitposN = bitposN;
 		_bitposR = bitposR;
 		_bitposM = bitposM;
-		_nextcommanded     = _commanded = _real = Switch::UNKNOWN; 
+		_nextcommanded = _commanded = _real = _safestate = Switch::UNKNOWN; 
 		_timer = Switch::NOTIMER;; 
 	};
     
@@ -216,7 +200,7 @@ private:
             case Switch::ERROR:    return "  ERROR";
 		};
 	};
-	const char *_name;
+	char *_name;
     State _commanded;      // from cTc
     State _nextcommanded;  // delayed, from commanded
     State _safestate;      // delayed, from safe test
@@ -230,13 +214,12 @@ private:
 	int 		_bitposM;
 
     Timer _timer;
-    unsigned int _timestarted;
-    unsigned int _time2end;
+	elapsedMillis _delaytime;
+	unsigned int _time2end;
     boolean runningTime;
     RRSignal *_my_signal;
     TrackCircuit *_my_track;
 };
-
 
 #endif
 

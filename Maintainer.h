@@ -5,6 +5,9 @@
 /*
  *   Maintainer Call abstraction
  *
+ *    Copyright (c) 2013-2015 John Plocher
+ *    Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+ *
  */
 class Maintainer {
 public:
@@ -35,7 +38,6 @@ public:
     }
     boolean named(char *n)      { return strcmp(n, _name) == 0; }
     void print(void)            {
-#ifdef DEBUG
 	 									const char *s;
                                         for(int x = 7-strlen(_name); x > 0; x--) { Serial.print(" "); }
                                         Serial.print(_name); Serial.print(":"); 
@@ -47,7 +49,6 @@ public:
                                             case Maintainer::ERROR:    s = "     ERROR"; break;
                                         }
                                         Serial.print(s);
-#endif
                                        };
     
 private:
